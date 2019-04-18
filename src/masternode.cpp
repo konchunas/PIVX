@@ -838,3 +838,67 @@ void CMasternodePing::Relay()
     CInv inv(MSG_MASTERNODE_PING, GetHash());
     RelayInv(inv);
 }
+
+bool CMasternodeBroadcast::ColdCreate(std::string strService, std::string strKeyMasternode, std::string strTxHash, int outputIndex, std::string best_block, CKey collateralKey, std::string &strErrorRet, CMasternodeBroadcast &mnbRet) {
+    LogPrintf("CMasternodeBroadcast::ColdCreate\n");
+    CPubKey pubKeyMasternodeNew;
+    CKey keyMasternodeNew;
+
+    if (!obfuScationSigner.GetKeysFromSecret(strKeyMasternode, keyMasternodeNew, pubKeyMasternodeNew)) {
+        strErrorRet = strprintf("Invalid Masternode key %s", strKeyMasternode);
+        LogPrintf("CMasternodeBroadcast::ColdCreate -- %s\n", strErrorRet);
+        return false;
+    }
+
+    auto pubKeyCollateral = collateralKey.GetPubKey();
+
+    CService service = CService(strService);
+    int mainnetDefaultPort = Params(CBaseChainParams::MAIN).GetDefaultPort();
+    if (Params().NetworkID() == CBaseChainParams::MAIN) {
+        if (service.GetPort() != mainnetDefaultPort) {
+            strErrorRet = strprintf("Invalid port %u for Masternode %s, only %d is supported on mainnet.", service.GetPort(), strService, mainnetDefaultPort);
+            LogPrintf("CMasternodeBroadcast::ColdCreate -- %s\n", strErrorRet);
+            return false;
+        }
+    } else if (service.GetPort() == mainnetDefaultPort) {
+        strErrorRet = strprintf("Invalid port %u for Masternode %s, %d is the only supported on mainnet.", service.GetPort(), strService, mainnetDefaultPort);
+        LogPrintf("CMasternodeBroadcast::ColdCreate -- %s\n", strErrorRet);
+        return false;
+    }
+
+    //raw ping initialization
+    CMasternodePing ping;
+    ping.blockHash = uint256S(best_block);
+    auto hash_txin = uint256S(strTxHash);
+    auto prevout = COutPoint(hash_txin, outputIndex);
+    auto txin = CTxIn(prevout);
+    ping.vin = txin;
+    ping.sigTime = GetAdjustedTime();
+    ping.vchSig = std::vector < unsigned char > ();
+
+    if (!ping.Sign(keyMasternodeNew, pubKeyMasternodeNew)) {
+        strErrorRet = strprintf("Failed to sign ping, Masternode=%s", txin.prevout.ToStringShort());
+        LogPrintf("CMasternodeBroadcast::Create -- %s\n", strErrorRet);
+        mnbRet = CMasternodeBroadcast();
+        return false;
+    }
+
+    mnbRet = CMasternodeBroadcast(service, txin, pubKeyCollateral, pubKeyMasternodeNew, PROTOCOL_VERSION);
+
+    if (!mnbRet.IsValidNetAddr()) {
+        strErrorRet = strprintf("Invalid IP address, Masternode=%s", txin.prevout.ToStringShort());
+        LogPrintf("CMasternodeBroadcast::Create -- %s\n", strErrorRet);
+        mnbRet = CMasternodeBroadcast();
+        return false;
+    }
+
+    mnbRet.lastPing = ping;
+    if (!mnbRet.Sign(collateralKey)) {
+        strErrorRet = strprintf("Failed to sign broadcast, Masternode=%s", txin.prevout.ToStringShort());
+        LogPrintf("CMasternodeBroadcast::Create -- %s\n", strErrorRet);
+        mnbRet = CMasternodeBroadcast();
+        return false;
+    }
+
+    return true;
+}
